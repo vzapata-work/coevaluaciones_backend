@@ -53,17 +53,29 @@ router.get('/:sesion_id', async (req, res) => {
     const sesion = await verificarSesion(req.params.sesion_id, req.usuario.id)
     if (!sesion) return res.status(404).json({ error: 'Sesión no encontrada' })
 
-    // Resultado final por alumno (desde la vista)
-    const { data: resultados, error: errRes } = await supabase
+    // Todos los alumnos que están en algún grupo de esta sesión
+    const { data: miembros, error: errMiembros } = await supabase
+      .from('grupo_miembros')
+      .select('alumno_id, alumnos(id, nombre, correo, aula), grupos!inner(sesion_id)')
+      .eq('grupos.sesion_id', req.params.sesion_id)
+
+    if (errMiembros) throw errMiembros
+
+    // Alumnos únicos en grupos (puede haber duplicados si están en varios grupos)
+    const alumnosMap = {}
+    for (const m of (miembros || [])) {
+      if (m.alumnos && !alumnosMap[m.alumnos.id]) {
+        alumnosMap[m.alumnos.id] = m.alumnos
+      }
+    }
+
+    // Resultado final por alumno (desde la vista — solo los que ya tienen evaluaciones)
+    const { data: resultados } = await supabase
       .from('v_resultados_alumno')
       .select('*')
       .eq('sesion_id', req.params.sesion_id)
-      .order('alumno_aula')
-      .order('alumno_nombre')
 
-    if (errRes) throw errRes
-
-    // Resultado por criterio (desde la vista)
+    // Resultado por criterio
     const { data: porCriterio } = await supabase
       .from('v_resultados_por_criterio')
       .select('*')
@@ -75,27 +87,41 @@ router.get('/:sesion_id', async (req, res) => {
       .select('*')
       .eq('sesion_id', req.params.sesion_id)
 
-    // Combinar resultado final con desglose por criterio
-    const resultadosCompletos = resultados.map(r => {
-      const criteriosDel = porCriterio
-        .filter(c => c.evaluado_id === r.evaluado_id)
-        .sort((a, b) => a.criterio_index - b.criterio_index)
-        .map(c => ({
-          criterio_index: c.criterio_index,
-          nombre:         sesion.criterios[c.criterio_index]?.nombre || `Criterio ${c.criterio_index + 1}`,
-          pct:            c.pct_criterio,
-          descriptor:     descriptorDesdePct(c.pct_criterio),
-        }))
+    // Mapa de resultados por alumno_id
+    const resultadosMap = {}
+    for (const r of (resultados || [])) {
+      resultadosMap[r.evaluado_id] = r
+    }
+
+    // Combinar: todos los alumnos en grupos + sus resultados (o pendiente si no tienen)
+    const todosAlumnos = Object.values(alumnosMap).sort((a, b) =>
+      a.aula.localeCompare(b.aula) || a.nombre.localeCompare(b.nombre)
+    )
+
+    const resultadosCompletos = todosAlumnos.map(alumno => {
+      const r = resultadosMap[alumno.id]
+      const criteriosDel = r
+        ? (porCriterio || [])
+            .filter(c => c.evaluado_id === alumno.id)
+            .sort((a, b) => a.criterio_index - b.criterio_index)
+            .map(c => ({
+              criterio_index: c.criterio_index,
+              nombre:         sesion.criterios[c.criterio_index]?.nombre || `Criterio ${c.criterio_index + 1}`,
+              pct:            c.pct_criterio,
+              descriptor:     descriptorDesdePct(c.pct_criterio),
+            }))
+        : []
 
       return {
-        alumno_id:    r.evaluado_id,
-        nombre:       r.alumno_nombre,
-        aula:         r.alumno_aula,
-        correo:       r.alumno_correo,
-        num_evals:    r.num_evaluaciones_recibidas,
-        pct_final:    r.pct_final,
-        descriptor:   r.descriptor_final,
+        alumno_id:    alumno.id,
+        nombre:       alumno.nombre,
+        aula:         alumno.aula,
+        correo:       alumno.correo,
+        num_evals:    r?.num_evaluaciones_recibidas || 0,
+        pct_final:    r?.pct_final || null,
+        descriptor:   r?.descriptor_final || null,
         por_criterio: criteriosDel,
+        completado:   !!r,
       }
     })
 
