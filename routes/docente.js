@@ -312,4 +312,35 @@ router.patch('/sesiones/:id/estado', async (req, res) => {
   }
 })
 
+// DELETE /api/docente/sesiones/:id
+// Elimina una sesión y todos sus datos (grupos, miembros, evaluaciones)
+// Las tablas tienen ON DELETE CASCADE así que basta con borrar la sesión
+router.delete('/sesiones/:id', async (req, res) => {
+  try {
+    // Verificar propiedad
+    const { data: sesion } = await supabase
+      .from('sesiones')
+      .select('id, nombre')
+      .eq('id', req.params.id)
+      .eq('docente_id', req.usuario.id)
+      .single()
+
+    if (!sesion) {
+      return res.status(404).json({ error: 'Sesión no encontrada' })
+    }
+
+    const { error } = await supabase
+      .from('sesiones')
+      .delete()
+      .eq('id', req.params.id)
+
+    if (error) throw error
+    res.json({ ok: true, eliminado: sesion.nombre })
+
+  } catch (err) {
+    console.error('Error eliminando sesión:', err)
+    res.status(500).json({ error: 'Error al eliminar la sesión' })
+  }
+})
+
 module.exports = router
