@@ -1,0 +1,22 @@
+# render.yaml — configuración automática para Render
+# Render detecta este archivo y configura el servicio solo.
+# No es obligatorio pero simplifica el setup inicial.
+
+services:
+  - type: web
+    name: evaluacion-grupal-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Las siguientes variables las agregas manualmente en el panel de Render
+      # (no se ponen aquí por seguridad):
+      # SUPABASE_URL
+      # SUPABASE_SERVICE_KEY
+      # GOOGLE_CLIENT_ID
+      # DOMINIO_INSTITUCIONAL
+      # FRONTEND_URL

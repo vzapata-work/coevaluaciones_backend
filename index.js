@@ -18,9 +18,7 @@ const app = express()
 // ── Middleware global ──────────────────────────────────────
 
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production'
-    ? 'https://tu-app.vercel.app'   // reemplazar con tu dominio en Vercel
-    : 'http://localhost:3000',
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true,
 }))
 app.use(express.json())
@@ -49,7 +47,7 @@ app.use((err, req, res, next) => {
 // ── Inicio ─────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3001
-app.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`)
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Servidor corriendo en puerto ${PORT}`)
   console.log(`Dominio institucional: ${process.env.DOMINIO_INSTITUCIONAL}`)
 })
