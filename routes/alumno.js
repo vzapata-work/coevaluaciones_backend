@@ -53,9 +53,20 @@ router.get('/sesion-activa', async (req, res) => {
 
     if (error) throw error
 
-    const activa   = sesiones.find(s => s.estado === 'abierta' &&
-                       (!s.cierra_en || new Date(s.cierra_en) > new Date()))
-    const historial = sesiones.filter(s => s.id !== activa?.id)
+    const activaBase = sesiones.find(s => s.estado === 'abierta' &&
+                          (!s.cierra_en || new Date(s.cierra_en) > new Date()))
+    const historial  = sesiones.filter(s => s.id !== activaBase?.id)
+
+    // Verificar si el alumno ya completó la sesión activa
+    let activa = null
+    if (activaBase) {
+      const { count } = await supabase
+        .from('evaluaciones')
+        .select('id', { count: 'exact', head: true })
+        .eq('sesion_id', activaBase.id)
+        .eq('evaluador_id', req.usuario.id)
+      activa = { ...activaBase, alumno_completo: (count || 0) > 0 }
+    }
 
     // Para cada sesión del historial, verificar si el alumno completó
     const historialConEstado = await Promise.all(
