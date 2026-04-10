@@ -53,20 +53,38 @@ router.get('/:sesion_id', async (req, res) => {
     const sesion = await verificarSesion(req.params.sesion_id, req.usuario.id)
     if (!sesion) return res.status(404).json({ error: 'Sesión no encontrada' })
 
-    // Todos los alumnos que están en algún grupo de esta sesión
-    const { data: miembros, error: errMiembros } = await supabase
-      .from('grupo_miembros')
-      .select('alumno_id, alumnos(id, nombre, correo, aula), grupos!inner(sesion_id)')
-      .eq('grupos.sesion_id', req.params.sesion_id)
+    // Todos los alumnos de las aulas de la sesión (lista completa)
+    const { data: todosAlumnosAula, error: errAlumnos } = await supabase
+      .from('alumnos')
+      .select('id, nombre, correo, aula')
+      .eq('docente_id', req.usuario.id)
+      .in('aula', sesion.aulas)
+      .order('aula')
+      .order('nombre')
 
-    if (errMiembros) throw errMiembros
+    if (errAlumnos) throw errAlumnos
 
-    // Alumnos únicos en grupos (puede haber duplicados si están en varios grupos)
+    // Alumnos que están en algún grupo de esta sesión
+    const { data: gruposDeSesion } = await supabase
+      .from('grupos')
+      .select('id')
+      .eq('sesion_id', req.params.sesion_id)
+
+    const grupoIds = (gruposDeSesion || []).map(g => g.id)
+
+    const { data: miembros } = grupoIds.length > 0
+      ? await supabase
+          .from('grupo_miembros')
+          .select('alumno_id')
+          .in('grupo_id', grupoIds)
+      : { data: [] }
+
+    const idsConGrupo = new Set((miembros || []).map(m => m.alumno_id))
+
+    // Mapa de todos los alumnos con flag de si tienen grupo
     const alumnosMap = {}
-    for (const m of (miembros || [])) {
-      if (m.alumnos && !alumnosMap[m.alumnos.id]) {
-        alumnosMap[m.alumnos.id] = m.alumnos
-      }
+    for (const a of (todosAlumnosAula || [])) {
+      alumnosMap[a.id] = { ...a, tiene_grupo: idsConGrupo.has(a.id) }
     }
 
     // Resultado final por alumno (desde la vista — solo los que ya tienen evaluaciones recibidas)
@@ -101,14 +119,13 @@ router.get('/:sesion_id', async (req, res) => {
       resultadosMap[r.evaluado_id] = r
     }
 
-    // Combinar: todos los alumnos en grupos + sus resultados
-    const todosAlumnos = Object.values(alumnosMap).sort((a, b) =>
-      a.aula.localeCompare(b.aula) || a.nombre.localeCompare(b.nombre)
-    )
+    // Combinar: TODOS los alumnos del aula + sus resultados
+    const todosAlumnos = Object.values(alumnosMap)
 
     const resultadosCompletos = todosAlumnos.map(alumno => {
-      const r = resultadosMap[alumno.id]
+      const r          = resultadosMap[alumno.id]
       const completado = idsQueEnviaron.has(alumno.id)
+      const tiene_grupo = alumno.tiene_grupo
 
       const criteriosDel = r
         ? (porCriterio || [])
@@ -132,6 +149,7 @@ router.get('/:sesion_id', async (req, res) => {
         descriptor:   r?.descriptor_final || null,
         por_criterio: criteriosDel,
         completado,
+        tiene_grupo,
       }
     })
 
