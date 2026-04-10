@@ -485,4 +485,74 @@ router.post('/evaluaciones', async (req, res) => {
   }
 })
 
+
+// ══════════════════════════════════════════════════════════
+// GET /api/alumno/mis-respuestas/:sesion_id
+// Devuelve las evaluaciones que el alumno envio en una sesion
+// ══════════════════════════════════════════════════════════
+
+router.get('/mis-respuestas/:sesion_id', async (req, res) => {
+  try {
+    const { sesion_id } = req.params
+
+    const { data: sesion } = await supabase
+      .from('sesiones')
+      .select('id, nombre, criterios, con_autoevaluacion')
+      .eq('id', sesion_id)
+      .single()
+
+    if (!sesion) return res.status(404).json({ error: 'Sesion no encontrada' })
+
+    const { data: evaluaciones, error } = await supabase
+      .from('evaluaciones')
+      .select('evaluado_id, respuestas, enviado_en')
+      .eq('sesion_id', sesion_id)
+      .eq('evaluador_id', req.usuario.id)
+
+    if (error) throw error
+
+    if (!evaluaciones || evaluaciones.length === 0) {
+      return res.json({ sesion, evaluaciones: [] })
+    }
+
+    const evaluadosIds = evaluaciones.map(e => e.evaluado_id)
+    const { data: evaluados } = await supabase
+      .from('alumnos')
+      .select('id, nombre, aula')
+      .in('id', evaluadosIds)
+
+    const evaluadosMap = {}
+    for (const a of (evaluados || [])) evaluadosMap[a.id] = a
+
+    const resultado = evaluaciones.map(ev => {
+      const evaluado = evaluadosMap[ev.evaluado_id] || {}
+      return {
+        evaluado_id:       ev.evaluado_id,
+        evaluado_nombre:   evaluado.nombre || 'Desconocido',
+        evaluado_aula:     evaluado.aula || '',
+        es_autoevaluacion: ev.evaluado_id === req.usuario.id,
+        enviado_en:        ev.enviado_en,
+        respuestas:        (ev.respuestas || []).map(r => ({
+          criterio_index:  r.criterio_index,
+          criterio_nombre: sesion.criterios[r.criterio_index]?.nombre || ('Criterio ' + (r.criterio_index + 1)),
+          descriptor:      r.descriptor,
+          valor_pct:       r.valor_pct,
+        })),
+      }
+    })
+
+    resultado.sort((a, b) => {
+      if (a.es_autoevaluacion) return -1
+      if (b.es_autoevaluacion) return 1
+      return a.evaluado_nombre.localeCompare(b.evaluado_nombre)
+    })
+
+    res.json({ sesion, evaluaciones: resultado })
+
+  } catch (err) {
+    console.error('Error obteniendo mis respuestas:', err)
+    res.status(500).json({ error: 'Error al obtener tus respuestas' })
+  }
+})
+
 module.exports = router
