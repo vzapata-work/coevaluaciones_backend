@@ -69,7 +69,7 @@ router.get('/:sesion_id', async (req, res) => {
       }
     }
 
-    // Resultado final por alumno (desde la vista — solo los que ya tienen evaluaciones)
+    // Resultado final por alumno (desde la vista — solo los que ya tienen evaluaciones recibidas)
     const { data: resultados } = await supabase
       .from('v_resultados_alumno')
       .select('*')
@@ -87,19 +87,29 @@ router.get('/:sesion_id', async (req, res) => {
       .select('*')
       .eq('sesion_id', req.params.sesion_id)
 
-    // Mapa de resultados por alumno_id
+    // Alumnos que YA ENVIARON sus evaluaciones (evaluador_id en la tabla)
+    const { data: yaEnviaron } = await supabase
+      .from('evaluaciones')
+      .select('evaluador_id')
+      .eq('sesion_id', req.params.sesion_id)
+
+    const idsQueEnviaron = new Set((yaEnviaron || []).map(e => e.evaluador_id))
+
+    // Mapa de resultados recibidos por alumno_id
     const resultadosMap = {}
     for (const r of (resultados || [])) {
       resultadosMap[r.evaluado_id] = r
     }
 
-    // Combinar: todos los alumnos en grupos + sus resultados (o pendiente si no tienen)
+    // Combinar: todos los alumnos en grupos + sus resultados
     const todosAlumnos = Object.values(alumnosMap).sort((a, b) =>
       a.aula.localeCompare(b.aula) || a.nombre.localeCompare(b.nombre)
     )
 
     const resultadosCompletos = todosAlumnos.map(alumno => {
       const r = resultadosMap[alumno.id]
+      const completado = idsQueEnviaron.has(alumno.id)
+
       const criteriosDel = r
         ? (porCriterio || [])
             .filter(c => c.evaluado_id === alumno.id)
@@ -121,7 +131,7 @@ router.get('/:sesion_id', async (req, res) => {
         pct_final:    r?.pct_final || null,
         descriptor:   r?.descriptor_final || null,
         por_criterio: criteriosDel,
-        completado:   !!r,
+        completado,
       }
     })
 
