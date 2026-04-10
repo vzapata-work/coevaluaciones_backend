@@ -102,11 +102,14 @@ router.get('/companeros', async (req, res) => {
     if (error) throw error
 
     // Alumnos que ya tienen grupo en esta sesión
-    const { data: conGrupo } = await supabase
-      .from('grupo_miembros')
-      .select('alumno_id, grupos!inner(sesion_id)')
-      .eq('grupos.sesion_id', sesion_id)
-
+    const { data: gruposDeSesion } = await supabase
+      .from('grupos')
+      .select('id')
+      .eq('sesion_id', sesion_id)
+    const grupoIds = (gruposDeSesion || []).map(g => g.id)
+    const { data: conGrupo } = grupoIds.length > 0
+      ? await supabase.from('grupo_miembros').select('alumno_id').in('grupo_id', grupoIds)
+      : { data: [] }
     const idsConGrupo = new Set((conGrupo || []).map(g => g.alumno_id))
 
     const resultado = alumnos.map(a => ({
@@ -156,11 +159,15 @@ router.get('/companeros/aula/:aula', async (req, res) => {
 
     if (error) throw error
 
-    // Marcar quiénes ya tienen grupo
-    const { data: conGrupo } = await supabase
-      .from('grupo_miembros')
-      .select('alumno_id, grupos!inner(sesion_id)')
-      .eq('grupos.sesion_id', sesion_id)
+    // Marcar quiénes ya tienen grupo en esta sesión
+    const { data: gruposDeSesion2 } = await supabase
+      .from('grupos')
+      .select('id')
+      .eq('sesion_id', sesion_id)
+    const grupoIds2 = (gruposDeSesion2 || []).map(g => g.id)
+    const { data: conGrupo } = grupoIds2.length > 0
+      ? await supabase.from('grupo_miembros').select('alumno_id').in('grupo_id', grupoIds2)
+      : { data: [] }
 
     const idsConGrupo = new Set((conGrupo || []).map(g => g.alumno_id))
 
@@ -189,13 +196,27 @@ router.get('/grupo', async (req, res) => {
     const { sesion_id } = req.query
     if (!sesion_id) return res.status(400).json({ error: 'sesion_id requerido' })
 
-    // Buscar si el alumno ya tiene grupo
-    const { data: membresia } = await supabase
-      .from('grupo_miembros')
-      .select('grupo_id, grupos!inner(id, sesion_id, creado_por, creado_en)')
-      .eq('alumno_id', req.usuario.id)
-      .eq('grupos.sesion_id', sesion_id)
-      .single()
+    // Buscar si el alumno ya tiene grupo en esta sesión específica
+    const { data: grupoSesion } = await supabase
+      .from('grupos')
+      .select('id, sesion_id, creado_por, creado_en')
+      .eq('sesion_id', sesion_id)
+    const grupoIdsSesion = (grupoSesion || []).map(g => g.id)
+    const membresiaBruta = grupoIdsSesion.length > 0
+      ? await supabase
+          .from('grupo_miembros')
+          .select('grupo_id')
+          .eq('alumno_id', req.usuario.id)
+          .in('grupo_id', grupoIdsSesion)
+          .maybeSingle()
+      : { data: null }
+    const membresiaData = membresiaBruta?.data
+    const grupoInfo = membresiaData
+      ? (grupoSesion || []).find(g => g.id === membresiaData.grupo_id)
+      : null
+    const membresia = membresiaData && grupoInfo
+      ? { grupo_id: membresiaData.grupo_id, grupos: grupoInfo }
+      : null
 
     if (!membresia) {
       return res.json({ grupo: null })
@@ -271,14 +292,21 @@ router.post('/grupo', async (req, res) => {
     }
 
     // 3. Verificar que ninguno ya tiene grupo en esta sesión
-    const { data: yaConGrupo } = await supabase
-      .from('grupo_miembros')
-      .select('alumno_id, alumnos(nombre), grupos!inner(sesion_id)')
-      .in('alumno_id', todos_ids)
-      .eq('grupos.sesion_id', sesion_id)
+    const { data: gruposSesion } = await supabase
+      .from('grupos')
+      .select('id')
+      .eq('sesion_id', sesion_id)
+    const gIds = (gruposSesion || []).map(g => g.id)
+    const { data: yaConGrupo } = gIds.length > 0
+      ? await supabase
+          .from('grupo_miembros')
+          .select('alumno_id, alumnos(nombre)')
+          .in('alumno_id', todos_ids)
+          .in('grupo_id', gIds)
+      : { data: [] }
 
     if (yaConGrupo?.length > 0) {
-      const nombres = yaConGrupo.map(g => g.alumnos.nombre).join(', ')
+      const nombres = yaConGrupo.map(g => g.alumnos?.nombre || g.alumno_id).join(', ')
       return res.status(409).json({
         error: `Los siguientes alumnos ya tienen grupo en esta sesión: ${nombres}`,
       })
