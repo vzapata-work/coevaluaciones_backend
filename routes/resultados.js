@@ -121,35 +121,75 @@ router.get('/:sesion_id', async (req, res) => {
 
     // Combinar: TODOS los alumnos del aula + sus resultados
     const todosAlumnos = Object.values(alumnosMap)
+    const numCriterios = sesion.criterios.length
+    const DEFICIENTE_PCT = 25  // valor de autoevaluacion ausente
 
     const resultadosCompletos = todosAlumnos.map(alumno => {
-      const r          = resultadosMap[alumno.id]
-      const completado = idsQueEnviaron.has(alumno.id)
+      const r           = resultadosMap[alumno.id]
+      const completado  = idsQueEnviaron.has(alumno.id)
       const tiene_grupo = alumno.tiene_grupo
 
-      const criteriosDel = r
+      // Criterios base desde la vista (evaluaciones recibidas de compañeros)
+      const criteriosBase = r
         ? (porCriterio || [])
             .filter(c => c.evaluado_id === alumno.id)
             .sort((a, b) => a.criterio_index - b.criterio_index)
-            .map(c => ({
-              criterio_index: c.criterio_index,
-              nombre:         sesion.criterios[c.criterio_index]?.nombre || `Criterio ${c.criterio_index + 1}`,
-              pct:            c.pct_criterio,
-              descriptor:     descriptorDesdePct(c.pct_criterio),
-            }))
         : []
 
+      let pct_final   = r?.pct_final    ? parseFloat(r.pct_final)    : null
+      let descriptor  = r?.descriptor_final || null
+      let num_evals   = r?.num_evaluaciones_recibidas || 0
+      let criteriosDel = criteriosBase.map(c => ({
+        criterio_index: c.criterio_index,
+        nombre:         sesion.criterios[c.criterio_index]?.nombre || `Criterio ${c.criterio_index + 1}`,
+        pct:            c.pct_criterio,
+        descriptor:     descriptorDesdePct(c.pct_criterio),
+      }))
+
+      // Si tiene grupo, no completó y la sesión incluye autoevaluación:
+      // recalcular pct_final sumando autoevaluación ficticia de Deficiente (25%)
+      if (tiene_grupo && !completado && sesion.con_autoevaluacion && numCriterios > 0) {
+        // Recalcular cada criterio incluyendo el 25% ficticio
+        criteriosDel = sesion.criterios.map((crit, i) => {
+          const base = criteriosBase.find(c => c.criterio_index === i)
+          // promedio_real viene de la vista: es la suma de evaluaciones recibidas / n_evaluaciones
+          // necesitamos agregar una evaluación ficticia de 25%
+          let nuevoPct
+          if (base && base.pct_criterio !== null) {
+            // (promedio_actual * n_evals + 25) / (n_evals + 1)
+            const n = num_evals  // evaluaciones ya recibidas (sin autoevaluacion)
+            nuevoPct = Math.round(((base.pct_criterio * n) + DEFICIENTE_PCT) / (n + 1) * 100) / 100
+          } else {
+            // Solo tiene la autoevaluacion ficticia
+            nuevoPct = DEFICIENTE_PCT
+          }
+          return {
+            criterio_index: i,
+            nombre:         crit.nombre || `Criterio ${i + 1}`,
+            pct:            nuevoPct,
+            descriptor:     descriptorDesdePct(nuevoPct),
+            autoeval_ficticia: true,
+          }
+        })
+
+        // Recalcular pct_final como promedio de los criterios ajustados
+        pct_final  = Math.round(criteriosDel.reduce((s, c) => s + c.pct, 0) / numCriterios * 100) / 100
+        descriptor = descriptorDesdePct(pct_final)
+        num_evals  = num_evals + 1  // contamos la autoevaluacion ficticia
+      }
+
       return {
-        alumno_id:    alumno.id,
-        nombre:       alumno.nombre,
-        aula:         alumno.aula,
-        correo:       alumno.correo,
-        num_evals:    r?.num_evaluaciones_recibidas || 0,
-        pct_final:    r?.pct_final || null,
-        descriptor:   r?.descriptor_final || null,
-        por_criterio: criteriosDel,
+        alumno_id:             alumno.id,
+        nombre:                alumno.nombre,
+        aula:                  alumno.aula,
+        correo:                alumno.correo,
+        num_evals,
+        pct_final:             pct_final,
+        descriptor,
+        por_criterio:          criteriosDel,
         completado,
         tiene_grupo,
+        autoeval_penalizada:   tiene_grupo && !completado && sesion.con_autoevaluacion,
       }
     })
 
