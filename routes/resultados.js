@@ -352,4 +352,98 @@ router.get('/:sesion_id/exportar', async (req, res) => {
   }
 })
 
+
+// ══════════════════════════════════════════════════════════
+// GET /api/resultados/:sesion_id/alumno/:alumno_id
+// Detalle de evaluaciones recibidas por un alumno especifico
+// Solo accesible por el docente dueno de la sesion
+// ══════════════════════════════════════════════════════════
+
+router.get('/:sesion_id/alumno/:alumno_id', async (req, res) => {
+  try {
+    const sesion = await verificarSesion(req.params.sesion_id, req.usuario.id)
+    if (!sesion) return res.status(404).json({ error: 'Sesion no encontrada' })
+
+    // Datos del alumno
+    const { data: alumno } = await supabase
+      .from('alumnos')
+      .select('id, nombre, correo, aula')
+      .eq('id', req.params.alumno_id)
+      .single()
+
+    if (!alumno) return res.status(404).json({ error: 'Alumno no encontrado' })
+
+    // Evaluaciones recibidas por el alumno en esta sesion
+    // La sesion es anonima: no exponemos evaluador_id ni nombre del evaluador
+    const { data: evaluaciones, error } = await supabase
+      .from('evaluaciones')
+      .select('evaluador_id, respuestas, enviado_en')
+      .eq('sesion_id', req.params.sesion_id)
+      .eq('evaluado_id', req.params.alumno_id)
+
+    if (error) throw error
+
+    // Marcar cual es la autoevaluacion (evaluador == evaluado)
+    // y anonimizar el resto segun configuracion de la sesion
+    const detalle = (evaluaciones || []).map((ev, idx) => {
+      const esAutoeval = ev.evaluador_id === req.params.alumno_id
+      return {
+        numero:            esAutoeval ? 0 : idx + 1,
+        es_autoevaluacion: esAutoeval,
+        etiqueta:          esAutoeval ? 'Autoevaluacion' : ('Evaluador ' + (idx + 1)),
+        enviado_en:        ev.enviado_en,
+        respuestas:        (ev.respuestas || []).map(r => ({
+          criterio_index:  r.criterio_index,
+          criterio_nombre: sesion.criterios[r.criterio_index]?.nombre || ('Criterio ' + (r.criterio_index + 1)),
+          descriptor:      r.descriptor,
+          valor_pct:       r.valor_pct,
+        })),
+      }
+    })
+
+    // Ordenar: autoevaluacion primero
+    detalle.sort((a, b) => a.es_autoevaluacion ? -1 : b.es_autoevaluacion ? 1 : 0)
+
+    // Promedio por criterio
+    const numCriterios = sesion.criterios.length
+    const promediosPorCriterio = sesion.criterios.map((c, i) => {
+      const vals = detalle.map(ev => {
+        const r = ev.respuestas.find(r => r.criterio_index === i)
+        return r ? r.valor_pct : null
+      }).filter(v => v !== null)
+      const prom = vals.length > 0 ? vals.reduce((s, v) => s + v, 0) / vals.length : null
+      return {
+        criterio_index: i,
+        criterio_nombre: c.nombre,
+        promedio_pct: prom ? Math.round(prom * 100) / 100 : null,
+        descriptor: prom !== null
+          ? prom >= 100 ? 'Excelente' : prom >= 75 ? 'Bueno' : prom >= 50 ? 'Regular' : 'Deficiente'
+          : null,
+      }
+    })
+
+    const pctFinal = promediosPorCriterio.every(p => p.promedio_pct !== null)
+      ? Math.round(
+          promediosPorCriterio.reduce((s, p) => s + p.promedio_pct, 0) / numCriterios * 100
+        ) / 100
+      : null
+
+    res.json({
+      alumno,
+      sesion: { id: sesion.id, nombre: sesion.nombre, anonima: sesion.anonima },
+      total_evaluaciones: detalle.length,
+      pct_final: pctFinal,
+      descriptor_final: pctFinal !== null
+        ? pctFinal >= 100 ? 'Excelente' : pctFinal >= 75 ? 'Bueno' : pctFinal >= 50 ? 'Regular' : 'Deficiente'
+        : null,
+      por_criterio: promediosPorCriterio,
+      evaluaciones: detalle,
+    })
+
+  } catch (err) {
+    console.error('Error obteniendo detalle alumno:', err)
+    res.status(500).json({ error: 'Error al obtener el detalle' })
+  }
+})
+
 module.exports = router
