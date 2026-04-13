@@ -374,7 +374,6 @@ router.get('/:sesion_id/alumno/:alumno_id', async (req, res) => {
     if (!alumno) return res.status(404).json({ error: 'Alumno no encontrado' })
 
     // Evaluaciones recibidas por el alumno en esta sesion
-    // La sesion es anonima: no exponemos evaluador_id ni nombre del evaluador
     const { data: evaluaciones, error } = await supabase
       .from('evaluaciones')
       .select('evaluador_id, respuestas, enviado_en')
@@ -383,14 +382,22 @@ router.get('/:sesion_id/alumno/:alumno_id', async (req, res) => {
 
     if (error) throw error
 
-    // Marcar cual es la autoevaluacion (evaluador == evaluado)
-    // y anonimizar el resto segun configuracion de la sesion
+    // Obtener nombres de los evaluadores (el docente puede verlos)
+    const evaluadorIds = [...new Set((evaluaciones || []).map(e => e.evaluador_id))]
+    const { data: evaluadores } = evaluadorIds.length > 0
+      ? await supabase.from('alumnos').select('id, nombre').in('id', evaluadorIds)
+      : { data: [] }
+    const evaluadoresMap = {}
+    for (const e of (evaluadores || [])) evaluadoresMap[e.id] = e.nombre
+
+    // Construir detalle con nombre del evaluador visible para el docente
     const detalle = (evaluaciones || []).map((ev, idx) => {
       const esAutoeval = ev.evaluador_id === req.params.alumno_id
       return {
         numero:            esAutoeval ? 0 : idx + 1,
         es_autoevaluacion: esAutoeval,
         etiqueta:          esAutoeval ? 'Autoevaluacion' : ('Evaluador ' + (idx + 1)),
+        evaluador_nombre:  evaluadoresMap[ev.evaluador_id] || null,
         enviado_en:        ev.enviado_en,
         respuestas:        (ev.respuestas || []).map(r => ({
           criterio_index:  r.criterio_index,
