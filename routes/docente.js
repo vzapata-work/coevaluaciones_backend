@@ -343,4 +343,126 @@ router.delete('/sesiones/:id', async (req, res) => {
   }
 })
 
+
+// ══════════════════════════════════════════════════════════
+// GET /api/docente/grupos/:sesion_id
+// Lista todos los grupos de una sesión con sus miembros
+// ══════════════════════════════════════════════════════════
+
+router.get('/grupos/:sesion_id', async (req, res) => {
+  try {
+    const { data: sesion } = await supabase
+      .from('sesiones')
+      .select('id, max_grupo')
+      .eq('id', req.params.sesion_id)
+      .eq('docente_id', req.usuario.id)
+      .single()
+
+    if (!sesion) return res.status(404).json({ error: 'Sesión no encontrada' })
+
+    const { data: grupos } = await supabase
+      .from('grupos')
+      .select('id, creado_en, creado_por')
+      .eq('sesion_id', req.params.sesion_id)
+      .order('creado_en')
+
+    if (!grupos || grupos.length === 0) return res.json({ grupos: [] })
+
+    const grupoIds = grupos.map(g => g.id)
+
+    const { data: miembros } = await supabase
+      .from('grupo_miembros')
+      .select('grupo_id, alumno_id, alumnos(id, nombre, correo, aula)')
+      .in('grupo_id', grupoIds)
+
+    // Verificar cuáles tienen evaluaciones enviadas (no se pueden editar)
+    const { data: evals } = await supabase
+      .from('evaluaciones')
+      .select('evaluador_id, grupo_id')
+      .eq('sesion_id', req.params.sesion_id)
+
+    const gruposConEvals = new Set((evals || []).map(e => e.grupo_id))
+    const alumnosQueEvaluaron = new Set((evals || []).map(e => e.evaluador_id))
+
+    const resultado = grupos.map(g => ({
+      id:           g.id,
+      creado_en:    g.creado_en,
+      tiene_evaluaciones: gruposConEvals.has(g.id),
+      miembros:     (miembros || [])
+        .filter(m => m.grupo_id === g.id)
+        .map(m => ({
+          ...m.alumnos,
+          ya_evaluo: alumnosQueEvaluaron.has(m.alumnos?.id),
+        })),
+    }))
+
+    res.json({ grupos: resultado, max_grupo: sesion.max_grupo })
+
+  } catch (err) {
+    console.error('Error obteniendo grupos:', err)
+    res.status(500).json({ error: 'Error al obtener grupos' })
+  }
+})
+
+
+// ══════════════════════════════════════════════════════════
+// PATCH /api/docente/grupos/:grupo_id/miembros
+// Reemplaza los miembros de un grupo
+// Body: { miembro_ids: [uuid, ...] }
+// No se puede editar si algún miembro ya envió evaluaciones
+// ══════════════════════════════════════════════════════════
+
+router.patch('/grupos/:grupo_id/miembros', async (req, res) => {
+  try {
+    const { miembro_ids = [] } = req.body
+
+    if (miembro_ids.length === 0) {
+      return res.status(400).json({ error: 'El grupo debe tener al menos un miembro' })
+    }
+
+    // Verificar que el grupo pertenece a una sesión del docente
+    const { data: grupo } = await supabase
+      .from('grupos')
+      .select('id, sesion_id, sesiones!inner(id, docente_id, max_grupo)')
+      .eq('id', req.params.grupo_id)
+      .eq('sesiones.docente_id', req.usuario.id)
+      .single()
+
+    if (!grupo) return res.status(404).json({ error: 'Grupo no encontrado' })
+
+    const max_grupo = grupo.sesiones.max_grupo
+    if (miembro_ids.length > max_grupo) {
+      return res.status(400).json({ error: `El grupo no puede tener más de ${max_grupo} miembros` })
+    }
+
+    // Verificar que ningún miembro ya envió evaluaciones
+    const { data: evals } = await supabase
+      .from('evaluaciones')
+      .select('evaluador_id, alumnos!inner(nombre)')
+      .eq('sesion_id', grupo.sesion_id)
+      .eq('grupo_id', req.params.grupo_id)
+
+    if (evals && evals.length > 0) {
+      const nombres = [...new Set(evals.map(e => e.alumnos?.nombre))].join(', ')
+      return res.status(409).json({
+        error: `No se puede editar: los siguientes miembros ya enviaron su evaluación: ${nombres}`,
+      })
+    }
+
+    // Reemplazar miembros: borrar los actuales e insertar los nuevos
+    await supabase.from('grupo_miembros').delete().eq('grupo_id', req.params.grupo_id)
+
+    const { error } = await supabase
+      .from('grupo_miembros')
+      .insert(miembro_ids.map(alumno_id => ({ grupo_id: req.params.grupo_id, alumno_id })))
+
+    if (error) throw error
+    res.json({ ok: true, miembros: miembro_ids })
+
+  } catch (err) {
+    console.error('Error editando grupo:', err)
+    res.status(500).json({ error: 'Error al editar el grupo' })
+  }
+})
+
 module.exports = router
