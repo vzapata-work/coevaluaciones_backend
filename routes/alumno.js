@@ -273,9 +273,7 @@ router.post('/grupo', async (req, res) => {
     const { sesion_id, miembro_ids = [] } = req.body
 
     if (!sesion_id) return res.status(400).json({ error: 'sesion_id requerido' })
-    if (miembro_ids.length === 0) {
-      return res.status(400).json({ error: 'Debes seleccionar al menos un compañero' })
-    }
+    // miembro_ids puede ser vacío si el alumno trabaja solo (grupo de 1)
 
     // 1. Verificar que la sesión está abierta
     const { data: sesion } = await supabase
