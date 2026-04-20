@@ -193,8 +193,8 @@ router.post('/sesiones', async (req, res) => {
     if (criterios.length === 0) {
       return res.status(400).json({ error: 'Debes definir al menos un criterio' })
     }
-    if (max_grupo < 2 || max_grupo > 10) {
-      return res.status(400).json({ error: 'El tamaño máximo de grupo debe estar entre 2 y 10' })
+    if (max_grupo < 1 || max_grupo > 10) {
+      return res.status(400).json({ error: 'El tamaño máximo de grupo debe estar entre 1 y 10' })
     }
 
     const { data, error } = await supabase
